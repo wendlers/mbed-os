@@ -23,6 +23,8 @@
 #include "lwip_stack.h"
 
 #include "eth_arch.h"
+#include "lwip/sockets.h"
+#include "lwip/sys.h"
 #include "lwip/opt.h"
 #include "lwip/api.h"
 #include "lwip/inet.h"
@@ -34,6 +36,7 @@
 #include "lwip/mld6.h"
 #include "lwip/dns.h"
 #include "lwip/udp.h"
+#include "lwip/igmp.h"
 #include "netif/lwip_ethernet.h"
 #include "emac_api.h"
 #include "ppp_lwip.h"
@@ -1029,6 +1032,10 @@ static nsapi_error_t mbed_lwip_setsockopt(nsapi_stack_t *stack, nsapi_socket_t h
             if (optlen != sizeof(int)) {
                 return NSAPI_ERROR_UNSUPPORTED;
             }
+            typedef struct ip_mreq {
+                struct in_addr imr_multiaddr; /* IP multicast address of group */
+                struct in_addr imr_interface; /* local IP address of interface */
+            } ip_mreq;
 
             err_t igmp_err;
             const struct ip_mreq *imr = (const struct ip_mreq *)optval;
