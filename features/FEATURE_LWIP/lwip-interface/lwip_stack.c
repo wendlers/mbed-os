@@ -553,7 +553,6 @@ nsapi_error_t mbed_lwip_bringup_2(bool dhcp, bool ppp, const char *ip, const cha
 #endif /* LWIP_IPV6_AUTOCONFIG */
 #endif // LWIP_IPV6
 
-
 #if LWIP_IPV4
     if (!dhcp && !ppp) {
         ip4_addr_t ip_addr;
@@ -1020,6 +1019,37 @@ static nsapi_error_t mbed_lwip_setsockopt(nsapi_stack_t *stack, nsapi_socket_t h
                 ip_set_option(s->conn->pcb.ip, SOF_REUSEADDR);
             } else {
                 ip_reset_option(s->conn->pcb.ip, SOF_REUSEADDR);
+            }
+            return 0;
+
+        case NSAPI_ADD_MEMBERSHIP:
+        case NSAPI_DROP_MEMBERSHIP:
+            /* If this is a TCP or a RAW socket, ignore these options. */
+            /* @todo: assign membership to this socket so that it is dropped when closing the socket */
+            if (optlen != sizeof(int)) {
+                return NSAPI_ERROR_UNSUPPORTED;
+            }
+
+            err_t igmp_err;
+            const struct ip_mreq *imr = (const struct ip_mreq *)optval;
+            ip4_addr_t if_addr;
+            ip4_addr_t multi_addr;
+            //LWIP_SOCKOPT_CHECK_OPTLEN_CONN_PCB_TYPE(s, optlen, struct ip_mreq, NETCONN_UDP);
+            inet_addr_to_ip4addr(&if_addr, &imr->imr_interface);
+            inet_addr_to_ip4addr(&multi_addr, &imr->imr_multiaddr);
+            if (optname == NSAPI_ADD_MEMBERSHIP) {
+              if (!lwip_socket_register_membership(s, &if_addr, &multi_addr)) {
+                /* cannot track membership (out of memory) */
+                return -12;   // ENOMEM
+              } else {
+                igmp_err = igmp_joingroup(&if_addr, &multi_addr);
+              }
+            } else {
+              igmp_err = igmp_leavegroup(&if_addr, &multi_addr);
+              lwip_socket_unregister_membership(s, &if_addr, &multi_addr);
+            }
+            if (igmp_err != ERR_OK) {
+              return -99;     // EADDRNOTAVAIL;
             }
             return 0;
 
