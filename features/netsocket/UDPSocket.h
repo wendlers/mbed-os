@@ -56,6 +56,8 @@ public:
      */
     virtual ~UDPSocket();
 
+    int join_multicast_group(const char* address);
+
     /** Send a packet over a UDP socket
      *
      *  Sends data to the specified address specified by either a domain name

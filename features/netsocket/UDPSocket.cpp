@@ -15,6 +15,8 @@
  */
 
 #include "UDPSocket.h"
+#include "lwip/inet.h"
+#include "lwip/sockets.h"
 #include "Timer.h"
 #include "mbed_assert.h"
 
@@ -31,6 +33,21 @@ UDPSocket::~UDPSocket()
 nsapi_protocol_t UDPSocket::get_proto()
 {
     return NSAPI_UDP;
+}
+
+int UDPSocket::join_multicast_group(const char* address) {
+    typedef struct ip_mreq {
+        uint32_t imr_multiaddr; /* IP multicast address of group */
+        uint32_t imr_interface; /* local IP address of interface */
+    } ip_mreq;
+
+    ip_mreq mreq;
+
+    // Set up group address
+    mreq.imr_multiaddr = inet_addr(address);
+    mreq.imr_interface = htonl(INADDR_ANY);
+
+    return this->setsockopt(0, NSAPI_ADD_MEMBERSHIP, &mreq, sizeof(mreq));
 }
 
 nsapi_size_or_error_t UDPSocket::sendto(const char *host, uint16_t port, const void *data, nsapi_size_t size)
