@@ -256,6 +256,21 @@ typedef struct nsapi_stack {
     unsigned _stack_buffer[16];
 } nsapi_stack_t;
 
+/** nsapi_in_addr
+*/
+struct nsapi_in_addr {
+  uint32_t s_addr;
+};
+
+/** nsapi_ip_mreq structure
+ */
+typedef struct nsapi_ip_mreq
+{
+    struct nsapi_in_addr imr_multiaddr; /* IP multicast address of group */
+    struct nsapi_in_addr imr_interface; /* local IP address of interface */
+
+} nsapi_ip_mreq_t;
+
 /** nsapi_stack_api structure
  *
  *  Common api structure for network stack operations. A network stack
