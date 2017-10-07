@@ -162,17 +162,17 @@ int32_t Thread::signal_set(int32_t flags) {
     return osThreadFlagsSet(_tid, flags);
 }
 
-int32_t Thread::signal_clr(int32_t flags) {
-    return osThreadFlagsClear(flags);
-}
-
 Thread::State Thread::get_state() {
     uint8_t state = osThreadTerminated;
 
     _mutex.lock();
 
     if (_tid != NULL) {
+#if defined(MBED_OS_BACKEND_RTX5)
         state = _obj_mem.state;
+#else
+        state = osThreadGetState(_tid);
+#endif
     }
 
     _mutex.unlock();
@@ -189,6 +189,7 @@ Thread::State Thread::get_state() {
         case osThreadRunning:
             user_state = Running;
             break;
+#if defined(MBED_OS_BACKEND_RTX5)
         case osRtxThreadWaitingDelay:
             user_state = WaitingDelay;
             break;
@@ -216,6 +217,7 @@ Thread::State Thread::get_state() {
         case osRtxThreadWaitingMessagePut:
             user_state = WaitingMessagePut;
             break;
+#endif
         case osThreadTerminated:
         default:
             user_state = Deleted;
@@ -230,8 +232,7 @@ uint32_t Thread::stack_size() {
     _mutex.lock();
 
     if (_tid != NULL) {
-        os_thread_t *thread = (os_thread_t *)_tid;
-        size = thread->stack_size;
+        size = osThreadGetStackSize(_tid);
     }
 
     _mutex.unlock();
@@ -242,10 +243,12 @@ uint32_t Thread::free_stack() {
     uint32_t size = 0;
     _mutex.lock();
 
+#if defined(MBED_OS_BACKEND_RTX5)
     if (_tid != NULL) {
         os_thread_t *thread = (os_thread_t *)_tid;
-        size = (uint32_t)thread->stack_mem - thread->sp;
+        size = (uint32_t)thread->sp - (uint32_t)thread->stack_mem;
     }
+#endif
 
     _mutex.unlock();
     return size;
@@ -255,10 +258,12 @@ uint32_t Thread::used_stack() {
     uint32_t size = 0;
     _mutex.lock();
 
+#if defined(MBED_OS_BACKEND_RTX5)
     if (_tid != NULL) {
         os_thread_t *thread = (os_thread_t *)_tid;
         size = ((uint32_t)thread->stack_mem + thread->stack_size) - thread->sp;
     }
+#endif
 
     _mutex.unlock();
     return size;
@@ -269,11 +274,15 @@ uint32_t Thread::max_stack() {
     _mutex.lock();
 
     if (_tid != NULL) {
+#if defined(MBED_OS_BACKEND_RTX5)
         os_thread_t *thread = (os_thread_t *)_tid;
         uint32_t high_mark = 0;
         while (((uint32_t *)(thread->stack_mem))[high_mark] == 0xE25A2EA5)
             high_mark++;
         size = thread->stack_size - (high_mark * sizeof(uint32_t));
+#else
+        size = osThreadGetStackSize(_tid) - osThreadGetStackSpace(_tid);
+#endif
     }
 
     _mutex.unlock();
@@ -282,6 +291,10 @@ uint32_t Thread::max_stack() {
 
 const char *Thread::get_name() {
     return _attr.name;
+}
+
+int32_t Thread::signal_clr(int32_t flags) {
+    return osThreadFlagsClear(flags);
 }
 
 osEvent Thread::signal_wait(int32_t signals, uint32_t millisec) {
@@ -309,9 +322,10 @@ osEvent Thread::signal_wait(int32_t signals, uint32_t millisec) {
                 evt.status = (osStatus)osErrorValue;
                 break;
         }
+    } else {
+        evt.status = (osStatus)osEventSignal;
+        evt.value.signals = res;
     }
-    evt.status = (osStatus)osEventSignal;
-    evt.value.signals = res;
 
     return evt;
 }

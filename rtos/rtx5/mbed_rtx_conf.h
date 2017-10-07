@@ -24,6 +24,9 @@
 
 #include "mbed_rtx.h"
 
+/** Any access to RTX5 specific data structures used in common code should be wrapped in ifdef MBED_OS_BACKEND_RTX5 */
+#define MBED_OS_BACKEND_RTX5
+
 /** The thread's stack size can be configured by the application, if not explicitly specified it'll default to 4K */
 #ifndef MBED_CONF_APP_THREAD_STACK_SIZE
 #define MBED_CONF_APP_THREAD_STACK_SIZE 4096
@@ -39,6 +42,7 @@
 #define OS_DYNAMIC_MEM_SIZE         0
 
 #if defined(__CC_ARM)
+/* ARM toolchain uses up to 8 static mutexes, any further mutexes will be allocated on the heap. */
 #define OS_MUTEX_OBJ_MEM            1
 #define OS_MUTEX_NUM                8
 #endif

@@ -189,6 +189,7 @@ typedef struct coap_blockwise_payload_ {
     uint8_t             addr_len;
     uint8_t             *addr_ptr;
     uint16_t            port;
+    uint32_t            block_number;
 
     uint16_t            payload_len;
     uint8_t             *payload_ptr;
@@ -224,7 +225,7 @@ struct coap_s {
     uint32_t system_time;    /* System time seconds */
     uint16_t sn_coap_block_data_size;
     uint8_t sn_coap_resending_queue_msgs;
-    uint8_t sn_coap_resending_queue_bytes;
+    uint32_t sn_coap_resending_queue_bytes;
     uint8_t sn_coap_resending_count;
     uint8_t sn_coap_resending_intervall;
     uint8_t sn_coap_duplication_buffer_size;
