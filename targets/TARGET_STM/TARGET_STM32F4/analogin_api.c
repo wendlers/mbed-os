@@ -51,8 +51,8 @@ void analogin_init(analogin_t *obj, PinName pin)
 #endif
     // ADC Internal Channels "pins"  (Temperature, Vref, Vbat, ...)
     //   are described in PinNames.h and PeripheralPins.c
-    //   Pin value must be >= 0xF0
-    if (pin < 0xF0) {
+    //   Pin value must be between 0xF0 and 0xFF
+    if ((pin < 0xF0) || (pin >= 0x100)) {
         // Normal channels
         // Get the peripheral name from the pin and assign it to the object
         obj->handle.Instance = (ADC_TypeDef *) pinmap_peripheral(pin, PinMap_ADC);
@@ -180,11 +180,12 @@ static inline uint16_t adc_read(analogin_t *obj)
             break;
         case 17:
             sConfig.Channel = ADC_CHANNEL_VREFINT;
+            /*  From experiment, measurement needs max sampling time to be valid */
+            sConfig.SamplingTime = ADC_SAMPLETIME_480CYCLES;
             break;
         case 18:
             sConfig.Channel = ADC_CHANNEL_VBAT;
-            /*  From experiment, VBAT measurement needs max
-             *  sampling time to be avlid */
+            /*  From experiment, measurement needs max sampling time to be valid */
             sConfig.SamplingTime = ADC_SAMPLETIME_480CYCLES;
             break;
         default:

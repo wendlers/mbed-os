@@ -26,22 +26,13 @@ TIM_HandleTypeDef TimMasterHandle;
 volatile uint32_t SlaveCounter = 0;
 volatile uint32_t oc_int_part = 0;
 
-static int us_ticker_inited = 0;
-
 void us_ticker_init(void)
 {
-    if (us_ticker_inited) return;
-    us_ticker_inited = 1;
-
-    TimMasterHandle.Instance = TIM_MST;
-
-    HAL_InitTick(0); // The passed value is not used
+    /* NOTE: assuming that HAL tick has already been initialized! */
 }
 
 uint32_t us_ticker_read()
 {
-    if (!us_ticker_inited) us_ticker_init();
-
     uint16_t cntH_old, cntH, cntL;
     do {
         cntH_old = SlaveCounter;
@@ -73,7 +64,7 @@ void us_ticker_set_interrupt(timestamp_t timestamp)
 {
     // NOTE: This function must be called with interrupts disabled to keep our
     //       timer interrupt setup atomic
-    TimMasterHandle.Instance = TIM_MST;
+
     // Set new output compare value
     __HAL_TIM_SET_COMPARE(&TimMasterHandle, TIM_CHANNEL_1, timestamp & 0xFFFF);
     // Ensure the compare event starts clear
@@ -161,6 +152,7 @@ void us_ticker_set_interrupt(timestamp_t timestamp)
      */
     uint32_t current_time = us_ticker_read();
     uint32_t delta = timestamp - current_time;
+    /* Note: The case of delta <= 0 is handled in MBED upper layer */
     oc_int_part = (delta - 1) >> 16;
     if ( ((delta - 1) & 0xFFFF) >= 0x8000 &&
          __HAL_TIM_GET_FLAG(&TimMasterHandle, TIM_FLAG_CC1) == SET ) {
@@ -178,19 +170,21 @@ void us_ticker_set_interrupt(timestamp_t timestamp)
 
 void us_ticker_fire_interrupt(void)
 {
-    TimMasterHandle.Instance = TIM_MST;
+    /* When firing the event, the number of 16 bits counter wrap-ups (oc_int)
+     * must be re-initialized */
+    oc_int_part = 0;
     HAL_TIM_GenerateEvent(&TimMasterHandle, TIM_EVENTSOURCE_CC1);
 }
 
+/* NOTE: must be called with interrupts disabled! */
 void us_ticker_disable_interrupt(void)
 {
-    TimMasterHandle.Instance = TIM_MST;
     __HAL_TIM_DISABLE_IT(&TimMasterHandle, TIM_IT_CC1);
 }
 
+/* NOTE: must be called with interrupts disabled! */
 void us_ticker_clear_interrupt(void)
 {
-    TimMasterHandle.Instance = TIM_MST;
     __HAL_TIM_CLEAR_FLAG(&TimMasterHandle, TIM_FLAG_CC1);
 }
 

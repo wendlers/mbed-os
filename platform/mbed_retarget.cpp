@@ -13,9 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <time.h>
 #include "platform/platform.h"
 #include "platform/FilePath.h"
 #include "hal/serial_api.h"
+#include "hal/us_ticker_api.h"
 #include "platform/mbed_toolchain.h"
 #include "platform/mbed_semihost_api.h"
 #include "platform/mbed_interface.h"
@@ -24,6 +26,7 @@
 #include "platform/mbed_error.h"
 #include "platform/mbed_stats.h"
 #include "platform/mbed_critical.h"
+#include "platform/PlatformMutex.h"
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h>
@@ -33,8 +36,15 @@
 #include <errno.h>
 #include "platform/mbed_retarget.h"
 
+static SingletonPtr<PlatformMutex> _mutex;
+
 #if defined(__ARMCC_VERSION)
+#   if __ARMCC_VERSION >= 6010050
+#      include <arm_compat.h>
+#   endif
 #   include <rt_sys.h>
+#   include <rt_misc.h>
+#   include <stdint.h>
 #   define PREFIX(x)    _sys##x
 #   define OPEN_MAX     _SYS_OPEN
 #   ifdef __MICROLIB
@@ -228,10 +238,10 @@ extern "C" FILEHANDLE PREFIX(_open)(const char* name, int openmode) {
 
     FileHandle *res = NULL;
 
-    /* FILENAME: ":0x12345678" describes a FileHandle* */
+    /* FILENAME: ":(pointer)" describes a FileHandle* */
     if (name[0] == ':') {
         void *p;
-        std::sscanf(name, ":%p", &p);
+        memcpy(&p, name + 1, sizeof(p));
         res = (FileHandle*)p;
 
     /* FILENAME: "/file_system/file_name" */
@@ -334,6 +344,16 @@ extern "C" int PREFIX(_write)(FILEHANDLE fh, const unsigned char *buffer, unsign
 #endif
 }
 
+#if defined (__ARMCC_VERSION) && (__ARMCC_VERSION >= 6010050)
+extern "C" void PREFIX(_exit)(int return_code) {
+    while(1) {}
+}
+
+extern "C" void _ttywrch(int ch) {
+    serial_putc(&stdio_uart, ch);
+}
+#endif
+
 #if defined(__ICCARM__)
 extern "C" size_t    __read (int        fh, unsigned char *buffer, size_t       length) {
 #else
@@ -431,6 +451,7 @@ int _lseek(FILEHANDLE fh, int offset, int whence)
 #if defined(__ARMCC_VERSION)
     int whence = SEEK_SET;
 #endif
+
     if (fh < 3) {
         errno = ESPIPE;
         return -1;
@@ -497,17 +518,45 @@ extern "C" long PREFIX(_flen)(FILEHANDLE fh) {
     }
     return size;
 }
+
+extern "C" char Image$$RW_IRAM1$$ZI$$Limit[];
+
+extern "C" MBED_WEAK __value_in_regs struct __initial_stackheap _mbed_user_setup_stackheap(uint32_t R0, uint32_t R1, uint32_t R2, uint32_t R3)
+{
+    uint32_t zi_limit = (uint32_t)Image$$RW_IRAM1$$ZI$$Limit;
+    uint32_t sp_limit = __current_sp();
+
+    zi_limit = (zi_limit + 7) & ~0x7;    // ensure zi_limit is 8-byte aligned
+
+    struct __initial_stackheap r;
+    r.heap_base = zi_limit;
+    r.heap_limit = sp_limit;
+    return r;
+}
+
+extern "C" __value_in_regs struct __initial_stackheap __user_setup_stackheap(uint32_t R0, uint32_t R1, uint32_t R2, uint32_t R3) {
+    return _mbed_user_setup_stackheap(R0, R1, R2, R3);
+}
+
 #endif
 
 
 #if !defined(__ARMCC_VERSION) && !defined(__ICCARM__)
-extern "C" int _fstat(int fd, struct stat *st) {
-    if (fd < 3) {
+extern "C" int _fstat(int fh, struct stat *st) {
+    if (fh < 3) {
         st->st_mode = S_IFCHR;
         return  0;
     }
-    errno = EBADF;
-    return -1;
+
+    FileHandle* fhc = filehandles[fh-3];
+    if (fhc == NULL) {
+        errno = EBADF;
+        return -1;
+    }
+
+    st->st_mode = fhc->isatty() ? S_IFCHR : S_IFREG;
+    st->st_size = fhc->size();
+    return 0;
 }
 #endif
 
@@ -682,11 +731,11 @@ extern "C" uint32_t  __HeapLimit;
 extern "C" int errno;
 
 // Dynamic memory allocation related syscall.
-#if defined(TARGET_NUMAKER_PFM_NUC472) || defined(TARGET_NUMAKER_PFM_M453)
+#if defined(TARGET_NUVOTON)
 // Overwrite _sbrk() to support two region model (heap and stack are two distinct regions).
 // __wrap__sbrk() is implemented in:
-// TARGET_NUMAKER_PFM_NUC472    hal/targets/cmsis/TARGET_NUVOTON/TARGET_NUC472/TARGET_NUMAKER_PFM_NUC472/TOOLCHAIN_GCC_ARM/retarget.c
-// TARGET_NUMAKER_PFM_M453      hal/targets/cmsis/TARGET_NUVOTON/TARGET_M451/TARGET_NUMAKER_PFM_M453/TOOLCHAIN_GCC_ARM/retarget.c
+// TARGET_NUMAKER_PFM_NUC472    targets/TARGET_NUVOTON/TARGET_NUC472/TARGET_NUMAKER_PFM_NUC472/TOOLCHAIN_GCC_ARM/nuc472_retarget.c
+// TARGET_NUMAKER_PFM_M453      targets/TARGET_NUVOTON/TARGET_M451/TARGET_NUMAKER_PFM_M453/TOOLCHAIN_GCC_ARM/m451_retarget.c
 extern "C" void *__wrap__sbrk(int incr);
 extern "C" caddr_t _sbrk(int incr) {
     return (caddr_t) __wrap__sbrk(incr);
@@ -826,8 +875,12 @@ void mbed_set_unbuffered_stream(std::FILE *_file) {
  */
 std::FILE *mbed_fdopen(FileHandle *fh, const char *mode)
 {
-    char buf[12]; /* :0x12345678 + null byte */
-    std::sprintf(buf, ":%p", fh);
+    // This is to avoid scanf(buf, ":%.4s", fh) and the bloat it brings.
+    char buf[1 + sizeof(fh)]; /* :(pointer) */
+    MBED_STATIC_ASSERT(sizeof(buf) == 5, "Pointers should be 4 bytes.");
+    buf[0] = ':';
+    memcpy(buf + 1, &fh, sizeof(fh));
+
     std::FILE *stream = std::fopen(buf, mode);
     /* newlib-nano doesn't appear to ever call _isatty itself, so
      * happily fully buffers an interactive stream. Deal with that here.
@@ -839,7 +892,7 @@ std::FILE *mbed_fdopen(FileHandle *fh, const char *mode)
 }
 
 int mbed_getc(std::FILE *_file){
-#if defined (__ICCARM__)
+#if defined(__IAR_SYSTEMS_ICC__ ) && (__VER__ < 8000000)
     /*This is only valid for unbuffered streams*/
     int res = std::fgetc(_file);
     if (res>=0){
@@ -854,7 +907,7 @@ int mbed_getc(std::FILE *_file){
 }
 
 char* mbed_gets(char*s, int size, std::FILE *_file){
-#if defined (__ICCARM__)
+#if defined(__IAR_SYSTEMS_ICC__ ) && (__VER__ < 8000000)
     /*This is only valid for unbuffered streams*/
     char *str = fgets(s,size,_file);
     if (str!=NULL){
@@ -880,6 +933,9 @@ extern "C" WEAK void __iar_file_Mtxinit(__iar_Rmtx *mutex) {}
 extern "C" WEAK void __iar_file_Mtxdst(__iar_Rmtx *mutex) {}
 extern "C" WEAK void __iar_file_Mtxlock(__iar_Rmtx *mutex) {}
 extern "C" WEAK void __iar_file_Mtxunlock(__iar_Rmtx *mutex) {}
+#if defined(__IAR_SYSTEMS_ICC__ ) && (__VER__ >= 8000000)
+extern "C" WEAK void *__aeabi_read_tp (void) { return NULL ;}
+#endif
 #elif defined(__CC_ARM)
 // Do nothing
 #elif defined (__GNUC__)
@@ -966,6 +1022,16 @@ void *operator new[](std::size_t count)
     return buffer;
 }
 
+void *operator new(std::size_t count, const std::nothrow_t& tag)
+{
+    return malloc(count);
+}
+
+void *operator new[](std::size_t count, const std::nothrow_t& tag)
+{
+    return malloc(count);
+}
+
 void operator delete(void *ptr)
 {
     if (ptr != NULL) {
@@ -979,71 +1045,21 @@ void operator delete[](void *ptr)
     }
 }
 
-#if defined(MBED_CONF_RTOS_PRESENT) && defined(MBED_TRAP_ERRORS_ENABLED) && MBED_TRAP_ERRORS_ENABLED
-
-static const char* error_msg(int32_t status)
+/* @brief   standard c library clock() function.
+ *
+ * This function returns the number of clock ticks elapsed since the start of the program.
+ *
+ * @note Synchronization level: Thread safe
+ *
+ * @return
+ *  the number of clock ticks elapsed since the start of the program.
+ *
+ * */
+extern "C" clock_t clock()
 {
-    switch (status) {
-    case osError:
-        return "Unspecified RTOS error";
-    case osErrorTimeout:
-        return "Operation not completed within the timeout period";
-    case osErrorResource:
-        return "Resource not available";
-    case osErrorParameter:
-        return "Parameter error";
-    case osErrorNoMemory:
-        return "System is out of memory";
-    case osErrorISR:
-        return "Not allowed in ISR context";
-    default:
-        return "Unknown";
-    }
+    _mutex->lock();
+    clock_t t = ticker_read(get_us_ticker_data());
+    t /= 1000000 / CLOCKS_PER_SEC; // convert to processor time
+    _mutex->unlock();
+    return t;
 }
-
-extern "C" void EvrRtxKernelError (int32_t status)
-{
-    error("Kernel error %i: %s\r\n", status, error_msg(status));
-}
-
-extern "C" void EvrRtxThreadError (osThreadId_t thread_id, int32_t status)
-{
-    error("Thread %p error %i: %s\r\n", thread_id, status, error_msg(status));
-}
-
-extern "C" void EvrRtxTimerError (osTimerId_t timer_id, int32_t status)
-{
-    error("Timer %p error %i: %s\r\n", timer_id, status, error_msg(status));
-}
-
-extern "C" void EvrRtxEventFlagsError (osEventFlagsId_t ef_id, int32_t status)
-{
-    error("Event %p error %i: %s\r\n", ef_id, status, error_msg(status));
-}
-
-extern "C" void EvrRtxMutexError (osMutexId_t mutex_id, int32_t status)
-{
-    error("Mutex %p error %i: %s\r\n", mutex_id, status, error_msg(status));
-}
-
-extern "C" void EvrRtxSemaphoreError (osSemaphoreId_t semaphore_id, int32_t status)
-{
-    // Ignore semaphore overflow, the count will saturate with a returned error
-    if (status == osRtxErrorSemaphoreCountLimit) {
-        return;
-    }
-
-    error("Semaphore %p error %i\r\n", semaphore_id, status);
-}
-
-extern "C" void EvrRtxMemoryPoolError (osMemoryPoolId_t mp_id, int32_t status)
-{
-    error("Memory Pool %p error %i\r\n", mp_id, status);
-}
-
-extern "C" void EvrRtxMessageQueueError (osMessageQueueId_t mq_id, int32_t status)
-{
-    error("Message Queue %p error %i\r\n", mq_id, status);
-}
-
-#endif
